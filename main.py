@@ -3,86 +3,91 @@ import os
 from datetime import datetime
 import uvicorn
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
-
+import sys
 from web_app import app as web_app
 from database import db
 from wasabi_storage import storage
-
-# Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv()
 
 def run_bot_process():
-    """Run the bot in a separate process"""
+    """Run the Telegram bot as a separate process"""
     try:
-        print("🤖 Starting Telegram bot...")
+        print("🤖 Starting Telegram File Bot...")
+        log_file = open("bot.log", "a")
+        # Use sys.executable to ensure correct Python environment
+        subprocess_args = [sys.executable, "simple_bot.py"]
         import subprocess
-        # Start bot in background without waiting
-        subprocess.Popen(['python', 'simple_bot.py'], 
-                        stdout=subprocess.DEVNULL, 
-                        stderr=subprocess.DEVNULL)
-        print("🚀 Telegram File Bot started!")
+        process = subprocess.Popen(
+            subprocess_args,
+            stdout=log_file,
+            stderr=log_file,
+            bufsize=1
+        )
+        print("🚀 Telegram File Bot started! Logs: bot.log")
+        process.wait()  # Wait for bot to exit
     except Exception as e:
         print(f"❌ Bot startup error: {e}")
 
 async def main():
-    """Main function to start all services"""
+    """Main async entry point"""
     print("🚀 Starting Telegram File Bot services...")
-    
+
     # Initialize database
     await db.connect()
     print("✅ Database connected")
-    
+
     # Test Wasabi connection
     if await storage.test_connection():
         print("✅ Wasabi storage connected")
     else:
-        print("⚠️ Wasabi storage connection failed - check credentials")
-    
+        print("⚠️ Wasabi storage connection failed")
+
     # Start bot in separate process
     bot_process = multiprocessing.Process(target=run_bot_process, daemon=True)
     bot_process.start()
-    
-    print("🌐 Starting web server...")
+
+    # Start Uvicorn web server
+    port = int(os.getenv("PORT", 5000))
     config = uvicorn.Config(
-        web_app, 
-        host="0.0.0.0", 
-        port=5000,
+        web_app,
+        host="0.0.0.0",
+        port=port,
         log_level="info",
         reload=False
     )
     server = uvicorn.Server(config)
-    await server.serve()
+    try:
+        await server.serve()
+    finally:
+        # Terminate bot if web server stops
+        if bot_process.is_alive():
+            print("🛑 Stopping Telegram bot...")
+            bot_process.terminate()
+            bot_process.join()
 
 def run_main():
-    """Main entry point"""
     print("=" * 50)
     print("🚀 TELEGRAM FILE BOT")
     print("=" * 50)
     print(f"⏰ Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
-    
-    # Check required environment variables
+
+    # Check environment variables
     required_vars = [
         'API_ID', 'API_HASH', 'BOT_TOKEN',
         'WASABI_ACCESS_KEY', 'WASABI_SECRET_KEY', 'WASABI_BUCKET',
         'DATABASE_URL'
     ]
-    
-    missing_vars = []
-    for var in required_vars:
-        if not os.getenv(var):
-            missing_vars.append(var)
-    
-    if missing_vars:
+    missing = [v for v in required_vars if not os.getenv(v)]
+    if missing:
         print("❌ Missing required environment variables:")
-        for var in missing_vars:
+        for var in missing:
             print(f"   - {var}")
-        print("\nPlease set these variables and restart the application.")
         return
-    
-    # Start the application
+
+    # Run main async function
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
@@ -92,3 +97,4 @@ def run_main():
 
 if __name__ == "__main__":
     run_main()
+        
