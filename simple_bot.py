@@ -322,17 +322,24 @@ async def handle_text(client, message: Message):
     await message.reply_text("Send a file to upload. Use /help for commands.")
 
 # ===== MAIN =====
-async def start_web():
-    config = uvicorn.Config(web_app, host="0.0.0.0", port=PORT, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
 async def main():
-    bot_task = app.start()
-    web_task = start_web()
-    await asyncio.gather(bot_task, web_task)
+    # Start bot
+    await app.start()
+    logger.info(f"🚀 Bot started. Running web server on port {PORT}...")
+
+    # Start web server concurrently
+    web_task = asyncio.create_task(
+        uvicorn.Server(
+            uvicorn.Config(web_app, host="0.0.0.0", port=PORT, log_level="info")
+        ).serve()
+    )
+
+    # Keep the bot running
+    await app.idle()
+
+    # Clean up
+    web_task.cancel()
+    await app.stop()
 
 if __name__ == "__main__":
-    logger.info(f"🚀 Starting Telegram File Bot + Web Interface on port {PORT}...")
     asyncio.run(main())
-        
