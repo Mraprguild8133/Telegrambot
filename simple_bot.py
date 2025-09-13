@@ -8,7 +8,6 @@ Features:
 - Web interface support
 - Progress updates with speed and ETA
 - Full metadata storage
-- Web server on port 5000 for Render.com
 """
 import os
 import uuid
@@ -17,14 +16,11 @@ import asyncio
 import mimetypes
 import logging
 from datetime import datetime
-from aiohttp import web
-import threading
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatAction
 
-# Import your custom modules
 from database import db
 from wasabi_storage import storage
 
@@ -32,23 +28,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("filebot")
 
 # ===== ENV VARIABLES =====
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
+API_ID = int(os.getenv("API_ID", 0))
+API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", 0))
 PUBLIC_DOMAIN = os.getenv("PUBLIC_DOMAIN")  # e.g., mybot.onrender.com
-PORT = int(os.getenv("PORT", 5000))  # Render.com provides PORT environment variable
 
-# Validate environment variables
 if not all([API_ID, API_HASH, BOT_TOKEN]):
     logger.error("Missing required environment variables")
-    exit(1)
-
-try:
-    API_ID = int(API_ID)
-    ADMIN_USER_ID = int(ADMIN_USER_ID) if ADMIN_USER_ID else 0
-except ValueError:
-    logger.error("API_ID and ADMIN_USER_ID must be integers")
     exit(1)
 
 # ===== CLIENT =====
@@ -58,67 +45,6 @@ app = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
-
-# ===== WEB SERVER SETUP =====
-async def handle_health_check(request):
-    """Health check endpoint for Render.com"""
-    return web.Response(text="OK", status=200)
-
-async def handle_index(request):
-    """Basic web interface"""
-    try:
-        bot_username = (await app.get_me()).username
-    except:
-        bot_username = "your_bot_username"
-        
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>File Bot</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
-            .header {{ text-align: center; margin-bottom: 30px; }}
-            .button {{ display: inline-block; padding: 10px 20px; background: #0084ff; color: white; 
-                     text-decoration: none; border-radius: 5px; margin: 5px; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>📁 File Bot</h1>
-            <p>Upload and share files via Telegram</p>
-        </div>
-        <div style="text-align: center;">
-            <a href="https://t.me/{bot_username}" class="button">Open Telegram Bot</a>
-        </div>
-    </body>
-    </html>
-    """
-    return web.Response(text=html_content, content_type='text/html')
-
-def run_web_server():
-    """Run the web server in a separate thread"""
-    async def web_server():
-        web_app = web.Application()
-        web_app.router.add_get('/', handle_index)
-        web_app.router.add_get('/health', handle_health_check)
-        
-        runner = web.AppRunner(web_app)
-        await runner.setup()
-        
-        site = web.TCPSite(runner, '0.0.0.0', PORT)
-        await site.start()
-        logger.info(f"Web server started on port {PORT}")
-        
-        # Keep the server running
-        while True:
-            await asyncio.sleep(3600)
-    
-    # Create a new event loop for the web server thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(web_server())
 
 # ===== UTILS =====
 def format_file_size(size_bytes: int) -> str:
@@ -367,12 +293,5 @@ async def handle_text(client, message: Message):
 
 # ===== MAIN =====
 if __name__ == "__main__":
-    logger.info("🚀 Starting Telegram File Bot with Web Server (Render.com ready)...")
-    
-    # Start the web server in a separate thread
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-    
-    # Start the Telegram bot
-    logger.info("Starting Telegram bot...")
+    logger.info("🚀 Starting Telegram File Bot (Render.com ready)...")
     app.run()
