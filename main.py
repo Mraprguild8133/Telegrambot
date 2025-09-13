@@ -15,16 +15,15 @@ def run_bot_process():
     """Run the Telegram bot as a separate process"""
     try:
         print("🤖 Starting Telegram File Bot...")
-        log_file = open("bot.log", "a")
-        # Use sys.executable to ensure correct Python environment
-        subprocess_args = [sys.executable, "simple_bot.py"]
-        import subprocess
-        process = subprocess.Popen(
-            subprocess_args,
-            stdout=log_file,
-            stderr=log_file,
-            bufsize=1
-        )
+        print("🤖 Starting Telegram File Bot...")
+        log_path = os.path.join(os.path.dirname(__file__), "bot.log")
+        with open(log_path, "a") as log_file:
+            subprocess.Popen(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "simple_bot.py")],
+                stdout=log_file,
+                stderr=log_file,
+                env=os.environ.copy()
+            )
         print("🚀 Telegram File Bot started! Logs: bot.log")
         process.wait()  # Wait for bot to exit
     except Exception as e:
