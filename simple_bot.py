@@ -214,7 +214,6 @@ async def handle_file(client, message: Message):
 async def handle_callback(client, callback_query):
     data = callback_query.data
     await callback_query.answer()
-
     if data == "upload_help":
         await callback_query.message.reply_text("📤 Send a file to upload. Supports documents, videos, audio, photos.")
     elif data.startswith("download_"):
@@ -231,18 +230,15 @@ async def handle_callback(client, callback_query):
         except Exception as e:
             await callback_query.answer(f"Error: {str(e)}", show_alert=True)
 
-# ===== WEB INTERFACE + BOT RUNNER =====
-async def run_bot():
-    await bot.start()
-    print("🤖 Telegram Bot Started")
+# ===== RUN BOT + WEB =====
+async def main():
+    await asyncio.gather(
+        bot.start(),
+        uvicorn.run(web_app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), log_level="info")
+    )
     await bot.idle()
-
-async def run_web():
-    port = int(os.getenv("PORT", 5000))
-    config = uvicorn.Config(web_app, host="0.0.0.0", port=port, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
 
 if __name__ == "__main__":
     print("🚀 Starting Telegram File Bot (Render.com ready)...")
-    asyncio.run(asyncio.gather(run_bot(), run_web()))
+    asyncio.run(main())
+            
