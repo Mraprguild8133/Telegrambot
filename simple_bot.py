@@ -5,9 +5,10 @@ Features:
 - Upload files up to 4GB
 - Wasabi cloud storage
 - MX Player & VLC streaming
-- Web interface support on port 5000
+- Web interface support
 - Progress updates with speed and ETA
 - Full metadata storage
+- Web server on port 5000 for Render.com
 """
 import os
 import uuid
@@ -16,15 +17,14 @@ import asyncio
 import mimetypes
 import logging
 from datetime import datetime
-from urllib.parse import urljoin
-
-from fastapi import FastAPI
-import uvicorn
+from aiohttp import web
+import threading
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatAction
 
+# Import your custom modules
 from database import db
 from wasabi_storage import storage
 
@@ -32,15 +32,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("filebot")
 
 # ===== ENV VARIABLES =====
-API_ID = int(os.getenv("API_ID", 0))
-API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", 0))
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 PUBLIC_DOMAIN = os.getenv("PUBLIC_DOMAIN")  # e.g., mybot.onrender.com
-PORT = int(os.getenv("PORT", 5000))  # Render port
+PORT = int(os.getenv("PORT", 5000))  # Render.com provides PORT environment variable
 
+# Validate environment variables
 if not all([API_ID, API_HASH, BOT_TOKEN]):
     logger.error("Missing required environment variables")
+    exit(1)
+
+try:
+    API_ID = int(API_ID)
+    ADMIN_USER_ID = int(ADMIN_USER_ID) if ADMIN_USER_ID else 0
+except ValueError:
+    logger.error("API_ID and ADMIN_USER_ID must be integers")
     exit(1)
 
 # ===== CLIENT =====
@@ -51,30 +59,55 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# ===== WEB APP =====
-web_app = FastAPI()
+# ===== WEB SERVER SETUP =====
+async def handle_health_check(request):
+    """Health check endpoint for Render.com"""
+    return web.Response(text="OK", status=200)
 
-@web_app.get("/")
-async def root():
-    return {"message": "Turbo File Bot is running!"}
+async def handle_index(request):
+    """Basic web interface"""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>File Bot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+            .header { text-align: center; margin-bottom: 30px; }
+            .button { display: inline-block; padding: 10px 20px; background: #0084ff; color: white; 
+                     text-decoration: none; border-radius: 5px; margin: 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>📁 File Bot</h1>
+            <p>Upload and share files via Telegram</p>
+        </div>
+        <div style="text-align: center;">
+            <a href="https://t.me/{}" class="button">Open Telegram Bot</a>
+        </div>
+    </body>
+    </html>
+    """.format((await app.get_me()).username)
+    return web.Response(text=html_content, content_type='text/html')
 
-@web_app.get("/stream/{file_id}")
-async def stream_file(file_id: str):
-    await ensure_db_connected()
-    file_data = await db.get_file(file_id)
-    if not file_data:
-        return {"error": "File not found"}
-    url = storage.generate_presigned_url(file_data["wasabi_key"], expiration=3600)
-    return {"file_id": file_id, "url": url}
-
-@web_app.get("/player/{file_id}")
-async def player_file(file_id: str):
-    await ensure_db_connected()
-    file_data = await db.get_file(file_id)
-    if not file_data:
-        return {"error": "File not found"}
-    mx_url = storage.get_mx_player_url(file_data["wasabi_key"], file_data["original_name"])
-    return {"file_id": file_id, "mx_player_url": mx_url}
+async def init_web_server():
+    """Initialize the web server"""
+    web_app = web.Application()
+    web_app.router.add_get('/', handle_index)
+    web_app.router.add_get('/health', handle_health_check)
+    
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logger.info(f"Web server started on port {PORT}")
+    
+    # Keep the server running
+    while True:
+        await asyncio.sleep(3600)  # Sleep for 1 hour
 
 # ===== UTILS =====
 def format_file_size(size_bytes: int) -> str:
@@ -109,7 +142,7 @@ async def save_user_info(user):
 def get_domain_url(path: str = "") -> str:
     if not PUBLIC_DOMAIN:
         return None
-    return urljoin(f"https://{PUBLIC_DOMAIN}/", path)
+    return f"https://{PUBLIC_DOMAIN}{path}"
 
 # ===== COMMANDS =====
 @app.on_message(filters.command("init_db"))
@@ -323,23 +356,22 @@ async def handle_text(client, message: Message):
 
 # ===== MAIN =====
 async def main():
-    # Start bot
+    """Main function to run both the Telegram bot and web server"""
+    # Start the web server in the background
+    web_server_task = asyncio.create_task(init_web_server())
+    
+    # Start the Telegram client
     await app.start()
-    logger.info(f"🚀 Bot started. Running web server on port {PORT}...")
-
-    # Start web server concurrently
-    web_task = asyncio.create_task(
-        uvicorn.Server(
-            uvicorn.Config(web_app, host="0.0.0.0", port=PORT, log_level="info")
-        ).serve()
-    )
-
-    # Keep the bot running
-    await app.idle()
-
-    # Clean up
-    web_task.cancel()
-    await app.stop()
+    
+    # Get bot info
+    bot_info = await app.get_me()
+    logger.info(f"Bot started as @{bot_info.username}")
+    
+    # Wait for both tasks
+    await asyncio.gather(web_server_task)
 
 if __name__ == "__main__":
+    logger.info("🚀 Starting Telegram File Bot with Web Server (Render.com ready)...")
+    
+    # Run the main function
     asyncio.run(main())
