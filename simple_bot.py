@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Telegram File Bot with optional Render web interface
-Main: Telegram bot
-Secondary: Web interface (port 5000)
+Complete Telegram File Bot — Render.com compatible
+Features:
+- Upload files up to 4GB
+- Wasabi cloud storage
+- MX Player & VLC streaming
+- Web interface support on port 5000
+- Progress updates with speed and ETA
+- Full metadata storage
 """
-
 import os
 import uuid
 import tempfile
@@ -12,6 +16,10 @@ import asyncio
 import mimetypes
 import logging
 from datetime import datetime
+from urllib.parse import urljoin
+
+from fastapi import FastAPI
+import uvicorn
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -19,10 +27,7 @@ from pyrogram.enums import ChatAction
 
 from database import db
 from wasabi_storage import storage
-from web_app import app as web_app
-import uvicorn
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("filebot")
 
@@ -32,13 +37,44 @@ API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", 0))
 PUBLIC_DOMAIN = os.getenv("PUBLIC_DOMAIN")  # e.g., mybot.onrender.com
+PORT = int(os.getenv("PORT", 5000))  # Render port
 
 if not all([API_ID, API_HASH, BOT_TOKEN]):
     logger.error("Missing required environment variables")
     exit(1)
 
-# ===== PYROGRAM CLIENT =====
-bot = Client("filebot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# ===== CLIENT =====
+app = Client(
+    "filebot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
+
+# ===== WEB APP =====
+web_app = FastAPI()
+
+@web_app.get("/")
+async def root():
+    return {"message": "Turbo File Bot is running!"}
+
+@web_app.get("/stream/{file_id}")
+async def stream_file(file_id: str):
+    await ensure_db_connected()
+    file_data = await db.get_file(file_id)
+    if not file_data:
+        return {"error": "File not found"}
+    url = storage.generate_presigned_url(file_data["wasabi_key"], expiration=3600)
+    return {"file_id": file_id, "url": url}
+
+@web_app.get("/player/{file_id}")
+async def player_file(file_id: str):
+    await ensure_db_connected()
+    file_data = await db.get_file(file_id)
+    if not file_data:
+        return {"error": "File not found"}
+    mx_url = storage.get_mx_player_url(file_data["wasabi_key"], file_data["original_name"])
+    return {"file_id": file_id, "mx_player_url": mx_url}
 
 # ===== UTILS =====
 def format_file_size(size_bytes: int) -> str:
@@ -73,13 +109,27 @@ async def save_user_info(user):
 def get_domain_url(path: str = "") -> str:
     if not PUBLIC_DOMAIN:
         return None
-    return f"https://{PUBLIC_DOMAIN}{path}"
+    return urljoin(f"https://{PUBLIC_DOMAIN}/", path)
 
-# ===== BOT COMMANDS =====
-@bot.on_message(filters.command("start"))
+# ===== COMMANDS =====
+@app.on_message(filters.command("init_db"))
+async def init_db(client, message: Message):
+    if message.from_user.id != ADMIN_USER_ID:
+        return
+    try:
+        await db.connect()
+        await message.reply_text("✅ Database initialized successfully!")
+    except Exception as e:
+        await message.reply_text(f"❌ DB init failed: {e}")
+
+@app.on_message(filters.command("start"))
 async def start_command(client, message: Message):
     await save_user_info(message.from_user)
-    welcome_text = "🚀 **TURBO FILE BOT**\n\nSend any file to upload 🚀"
+    welcome_text = (
+        "🚀 **TURBO FILE BOT**\n\n"
+        "Send any file and get instant high-speed upload 🚀"
+    )
+
     buttons = [
         [InlineKeyboardButton("📤 Upload File", callback_data="upload_help")],
         [InlineKeyboardButton("📁 My Files", callback_data="list_files")]
@@ -90,33 +140,23 @@ async def start_command(client, message: Message):
     keyboard = InlineKeyboardMarkup(buttons)
     await message.reply_text(welcome_text, reply_markup=keyboard)
 
-@bot.on_message(filters.command("web"))
+@app.on_message(filters.command("web"))
 async def web_command(client, message: Message):
     domain_url = get_domain_url()
     if domain_url:
-        await message.reply_text(f"🌐 Web Interface: {domain_url}")
+        await message.reply_text(f"🌐 **Web Interface:** {domain_url}")
     else:
         await message.reply_text("Web interface not configured. Set PUBLIC_DOMAIN env variable.")
 
-@bot.on_message(filters.command("help"))
-async def help_command(client, message: Message):
-    await message.reply_text(
-        "📖 Send any file to upload.\n"
-        "Commands:\n/start - Welcome\n/list - Your files\n/web - Web interface\n/help - This message"
-    )
-
-@bot.on_message(filters.text & ~filters.command(["start","web","list","help"]))
-async def handle_text(client, message: Message):
-    await message.reply_text("Send a file to upload. Use /help for commands.")
-
 # ===== FILE HANDLER =====
-@bot.on_message(filters.document | filters.video | filters.audio | filters.photo)
+@app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def handle_file(client, message: Message):
     await client.send_chat_action(message.chat.id, ChatAction.UPLOAD_DOCUMENT)
 
+    # Determine file info
     file_info = message.document or message.video or message.audio
     if message.photo:
-        file_info = message.photo[-1]
+        file_info = message.photo[-1]  # largest size
 
     if not file_info:
         await message.reply_text("❌ Unsupported file type")
@@ -135,8 +175,9 @@ async def handle_file(client, message: Message):
 
     try:
         await ensure_db_connected()
-        temp_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{file_name}")
-        await message.download(temp_path)
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            await message.download(temp_file.name)
+            temp_path = temp_file.name
 
         wasabi_key = f"files/{file_id}/{file_name}"
         uploaded_bytes = 0
@@ -182,6 +223,7 @@ async def handle_file(client, message: Message):
             }
             await db.save_file(file_data)
 
+            # Buttons
             buttons = [[InlineKeyboardButton("📥 Download", callback_data=f"download_{file_id}")]]
             domain_url = get_domain_url()
             if domain_url:
@@ -209,13 +251,35 @@ async def handle_file(client, message: Message):
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 
+# ===== LIST FILES =====
+@app.on_message(filters.command("list"))
+async def list_files_command(client, message: Message):
+    try:
+        await ensure_db_connected()
+        files = await db.list_user_files(message.from_user.id, limit=10)
+        if not files:
+            await message.reply_text("📁 No files uploaded yet.")
+            return
+
+        text = "📁 Your Uploaded Files:\n\n"
+        for i, fdata in enumerate(files, 1):
+            upload_date = getattr(fdata.get("upload_date"), "strftime", lambda x: "N/A")("%Y-%m-%d %H:%M")
+            text += f"{i}. {fdata['original_name']} ({format_file_size(fdata['file_size'])}) - {upload_date}\n"
+        await message.reply_text(text)
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+        logger.exception("List files error")
+
 # ===== CALLBACKS =====
-@bot.on_callback_query()
+@app.on_callback_query()
 async def handle_callback(client, callback_query):
     data = callback_query.data
     await callback_query.answer()
+
     if data == "upload_help":
         await callback_query.message.reply_text("📤 Send a file to upload. Supports documents, videos, audio, photos.")
+    elif data == "list_files":
+        await list_files_command(client, callback_query.message)
     elif data.startswith("download_"):
         file_id = data.replace("download_", "")
         try:
@@ -229,16 +293,46 @@ async def handle_callback(client, callback_query):
             await callback_query.message.reply_text(f"Download {file_data['original_name']}:", reply_markup=keyboard)
         except Exception as e:
             await callback_query.answer(f"Error: {str(e)}", show_alert=True)
+    elif data.startswith("mx_"):
+        file_id = data.replace("mx_", "")
+        try:
+            await ensure_db_connected()
+            file_data = await db.get_file(file_id)
+            if not file_data:
+                await callback_query.answer("File not found!", show_alert=True)
+                return
+            mx_url = storage.get_mx_player_url(file_data["wasabi_key"], file_data["original_name"])
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📱 Open in MX Player", url=mx_url)]])
+            await callback_query.message.reply_text(
+                f"📱 MX Player Ready: {file_data['original_name']}", reply_markup=keyboard
+            )
+        except Exception as e:
+            await callback_query.answer(f"Error: {str(e)}", show_alert=True)
 
-# ===== RUN BOT + WEB =====
-async def main():
-    await asyncio.gather(
-        bot.start(),
-        uvicorn.run(web_app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), log_level="info")
+# ===== HELP & TEXT =====
+@app.on_message(filters.command("help"))
+async def help_command(client, message: Message):
+    await message.reply_text(
+        "📖 Send any file to upload.\n"
+        "Commands:\n/start - Welcome\n/list - Your files\n/web - Web interface\n/help - This message"
     )
-    await bot.idle()
+
+@app.on_message(filters.text & ~filters.command(["start","web","list","help"]))
+async def handle_text(client, message: Message):
+    await message.reply_text("Send a file to upload. Use /help for commands.")
+
+# ===== MAIN =====
+async def start_web():
+    config = uvicorn.Config(web_app, host="0.0.0.0", port=PORT, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+async def main():
+    bot_task = app.start()
+    web_task = start_web()
+    await asyncio.gather(bot_task, web_task)
 
 if __name__ == "__main__":
-    print("🚀 Starting Telegram File Bot (Render.com ready)...")
+    logger.info(f"🚀 Starting Telegram File Bot + Web Interface on port {PORT}...")
     asyncio.run(main())
-            
+        
