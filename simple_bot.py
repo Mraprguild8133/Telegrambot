@@ -66,17 +66,22 @@ async def handle_health_check(request):
 
 async def handle_index(request):
     """Basic web interface"""
-    html_content = """
+    try:
+        bot_username = (await app.get_me()).username
+    except:
+        bot_username = "your_bot_username"
+        
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>File Bot</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-            .header { text-align: center; margin-bottom: 30px; }
-            .button { display: inline-block; padding: 10px 20px; background: #0084ff; color: white; 
-                     text-decoration: none; border-radius: 5px; margin: 5px; }
+            body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+            .header {{ text-align: center; margin-bottom: 30px; }}
+            .button {{ display: inline-block; padding: 10px 20px; background: #0084ff; color: white; 
+                     text-decoration: none; border-radius: 5px; margin: 5px; }}
         </style>
     </head>
     <body>
@@ -85,29 +90,35 @@ async def handle_index(request):
             <p>Upload and share files via Telegram</p>
         </div>
         <div style="text-align: center;">
-            <a href="https://t.me/{}" class="button">Open Telegram Bot</a>
+            <a href="https://t.me/{bot_username}" class="button">Open Telegram Bot</a>
         </div>
     </body>
     </html>
-    """.format((await app.get_me()).username)
+    """
     return web.Response(text=html_content, content_type='text/html')
 
-async def init_web_server():
-    """Initialize the web server"""
-    web_app = web.Application()
-    web_app.router.add_get('/', handle_index)
-    web_app.router.add_get('/health', handle_health_check)
+def run_web_server():
+    """Run the web server in a separate thread"""
+    async def web_server():
+        web_app = web.Application()
+        web_app.router.add_get('/', handle_index)
+        web_app.router.add_get('/health', handle_health_check)
+        
+        runner = web.AppRunner(web_app)
+        await runner.setup()
+        
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        logger.info(f"Web server started on port {PORT}")
+        
+        # Keep the server running
+        while True:
+            await asyncio.sleep(3600)
     
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    logger.info(f"Web server started on port {PORT}")
-    
-    # Keep the server running
-    while True:
-        await asyncio.sleep(3600)  # Sleep for 1 hour
+    # Create a new event loop for the web server thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(web_server())
 
 # ===== UTILS =====
 def format_file_size(size_bytes: int) -> str:
@@ -355,23 +366,13 @@ async def handle_text(client, message: Message):
     await message.reply_text("Send a file to upload. Use /help for commands.")
 
 # ===== MAIN =====
-async def main():
-    """Main function to run both the Telegram bot and web server"""
-    # Start the web server in the background
-    web_server_task = asyncio.create_task(init_web_server())
-    
-    # Start the Telegram client
-    await app.start()
-    
-    # Get bot info
-    bot_info = await app.get_me()
-    logger.info(f"Bot started as @{bot_info.username}")
-    
-    # Wait for both tasks
-    await asyncio.gather(web_server_task)
-
 if __name__ == "__main__":
     logger.info("🚀 Starting Telegram File Bot with Web Server (Render.com ready)...")
     
-    # Run the main function
-    asyncio.run(main())
+    # Start the web server in a separate thread
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    
+    # Start the Telegram bot
+    logger.info("Starting Telegram bot...")
+    app.run()
