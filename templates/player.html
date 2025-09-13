@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}{{ file.original_name }} - Player{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2 style="color: #4a5568; margin-bottom: 20px;">🎬 Media Player</h2>
+    
+    <div style="background: #000; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 20px;">
+        {% if file.mime_type.startswith('video/') %}
+        <video controls style="width: 100%; max-width: 800px; border-radius: 8px;">
+            <source src="{{ streaming_url }}" type="{{ file.mime_type }}">
+            Your browser does not support the video tag.
+        </video>
+        {% elif file.mime_type.startswith('audio/') %}
+        <audio controls style="width: 100%; max-width: 600px;">
+            <source src="{{ streaming_url }}" type="{{ file.mime_type }}">
+            Your browser does not support the audio tag.
+        </audio>
+        {% endif %}
+    </div>
+    
+    <div style="text-align: center; margin-bottom: 20px;">
+        <h3 style="color: #2d3748; margin-bottom: 10px;">📁 {{ file.original_name }}</h3>
+        <p style="color: #718096;">
+            🗂️ Type: {{ file.mime_type }} • 
+            📊 Size: {{ "%.1f MB"|format(file.file_size / 1024 / 1024) }} • 
+            ⬇️ Downloads: {{ file.download_count }}
+        </p>
+    </div>
+    
+    <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 30px;">
+        <a href="{{ streaming_url }}" class="btn" target="_blank">
+            🎬 Direct Stream
+        </a>
+        
+        <a href="{{ mx_url }}" class="btn btn-success" target="_blank">
+            📱 MX Player
+        </a>
+        
+        <a href="{{ vlc_url }}" class="btn btn-warning" target="_blank">
+            🎯 VLC Player
+        </a>
+        
+        <a href="{{ streaming_url }}" class="btn btn-danger" download="{{ file.original_name }}">
+            📥 Download
+        </a>
+    </div>
+    
+    <div style="background: #f7fafc; padding: 20px; border-radius: 12px;">
+        <h4 style="color: #2d3748; margin-bottom: 15px;">📱 Mobile Instructions</h4>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+            <div>
+                <h5 style="color: #4299e1; margin-bottom: 10px;">📱 MX Player (Android)</h5>
+                <ol style="color: #718096; padding-left: 20px; line-height: 1.6;">
+                    <li>Tap "MX Player" button above</li>
+                    <li>Select "MX Player" from app list</li>
+                    <li>Enjoy high-quality playback</li>
+                </ol>
+            </div>
+            
+            <div>
+                <h5 style="color: #ed8936; margin-bottom: 10px;">🎯 VLC Player</h5>
+                <ol style="color: #718096; padding-left: 20px; line-height: 1.6;">
+                    <li>Tap "VLC Player" button above</li>
+                    <li>Open with VLC app</li>
+                    <li>Works on all platforms</li>
+                </ol>
+            </div>
+            
+            <div>
+                <h5 style="color: #48bb78; margin-bottom: 10px;">🌐 Browser Streaming</h5>
+                <ol style="color: #718096; padding-left: 20px; line-height: 1.6;">
+                    <li>Use built-in player above</li>
+                    <li>Works in any browser</li>
+                    <li>No app installation needed</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3 style="color: #4a5568; margin-bottom: 20px;">📋 File Information</h3>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+        <div style="padding: 15px; background: #f7fafc; border-radius: 8px;">
+            <strong style="color: #2d3748;">File Name</strong>
+            <p style="color: #718096; word-break: break-all;">{{ file.original_name }}</p>
+        </div>
+        
+        <div style="padding: 15px; background: #f7fafc; border-radius: 8px;">
+            <strong style="color: #2d3748;">File Size</strong>
+            <p style="color: #718096;">{{ "%.1f MB"|format(file.file_size / 1024 / 1024) }}</p>
+        </div>
+        
+        <div style="padding: 15px; background: #f7fafc; border-radius: 8px;">
+            <strong style="color: #2d3748;">Media Type</strong>
+            <p style="color: #718096;">{{ file.mime_type }}</p>
+        </div>
+        
+        <div style="padding: 15px; background: #f7fafc; border-radius: 8px;">
+            <strong style="color: #2d3748;">Upload Date</strong>
+            <p style="color: #718096;">{{ file.upload_date.strftime('%Y-%m-%d %H:%M') }}</p>
+        </div>
+        
+        {% if file.metadata.duration %}
+        <div style="padding: 15px; background: #f7fafc; border-radius: 8px;">
+            <strong style="color: #2d3748;">Duration</strong>
+            <p style="color: #718096;">{{ file.metadata.duration }} seconds</p>
+        </div>
+        {% endif %}
+        
+        {% if file.metadata.width and file.metadata.height %}
+        <div style="padding: 15px; background: #f7fafc; border-radius: 8px;">
+            <strong style="color: #2d3748;">Resolution</strong>
+            <p style="color: #718096;">{{ file.metadata.width }}x{{ file.metadata.height }}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-refresh streaming URLs every 20 minutes to prevent expiration
+setTimeout(function() {
+    location.reload();
+}, 20 * 60 * 1000);
+
+// Mobile detection and player optimization
+if (/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+    // Mobile-specific optimizations
+    const video = document.querySelector('video');
+    const audio = document.querySelector('audio');
+    
+    if (video) {
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
+    }
+    
+    if (audio) {
+        audio.setAttribute('preload', 'none');
+    }
+}
+</script>
+{% endblock %}

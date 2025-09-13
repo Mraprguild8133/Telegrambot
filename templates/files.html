@@ -1,0 +1,243 @@
+{% extends "base.html" %}
+
+{% block title %}Browse Files{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2 style="color: #4a5568; margin-bottom: 20px;">📁 Browse Public Files</h2>
+    
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <input type="text" id="searchInput" placeholder="🔍 Search files..." 
+                   style="padding: 10px 15px; border: 2px solid #e2e8f0; border-radius: 25px; font-size: 14px; width: 250px; outline: none;">
+            <button onclick="searchFiles()" class="btn">Search</button>
+            <button onclick="loadFiles()" class="btn btn-success">Refresh</button>
+        </div>
+        
+        <div style="color: #718096; font-size: 0.9rem;">
+            <span id="fileCount">Loading...</span> files available
+        </div>
+    </div>
+    
+    <div id="filesContainer">
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Loading files...</p>
+        </div>
+    </div>
+    
+    <div id="loadMoreContainer" style="text-align: center; margin-top: 30px; display: none;">
+        <button onclick="loadMoreFiles()" class="btn" id="loadMoreBtn">Load More Files</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentOffset = 0;
+let isLoading = false;
+let hasMoreFiles = true;
+
+async function loadFiles(reset = true) {
+    if (isLoading) return;
+    
+    if (reset) {
+        currentOffset = 0;
+        hasMoreFiles = true;
+        document.getElementById('filesContainer').innerHTML = `
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading files...</p>
+            </div>
+        `;
+    }
+    
+    isLoading = true;
+    
+    try {
+        const response = await fetch(`/api/files?limit=20&offset=${currentOffset}`);
+        const data = await response.json();
+        
+        if (reset) {
+            displayFiles(data.files);
+        } else {
+            appendFiles(data.files);
+        }
+        
+        currentOffset += data.files.length;
+        hasMoreFiles = data.files.length === 20;
+        
+        document.getElementById('fileCount').textContent = currentOffset;
+        
+        const loadMoreContainer = document.getElementById('loadMoreContainer');
+        if (hasMoreFiles && currentOffset > 0) {
+            loadMoreContainer.style.display = 'block';
+        } else {
+            loadMoreContainer.style.display = 'none';
+        }
+        
+    } catch (error) {
+        console.error('Error loading files:', error);
+        document.getElementById('filesContainer').innerHTML = `
+            <div class="loading">
+                <p style="color: #f56565;">❌ Error loading files. Please try again.</p>
+            </div>
+        `;
+    }
+    
+    isLoading = false;
+}
+
+async function loadMoreFiles() {
+    await loadFiles(false);
+}
+
+async function searchFiles() {
+    const query = document.getElementById('searchInput').value.trim();
+    
+    if (!query) {
+        await loadFiles();
+        return;
+    }
+    
+    isLoading = true;
+    document.getElementById('filesContainer').innerHTML = `
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Searching for "${query}"...</p>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch(`/api/files?search=${encodeURIComponent(query)}&limit=50`);
+        const data = await response.json();
+        
+        displayFiles(data.files);
+        document.getElementById('fileCount').textContent = data.files.length;
+        document.getElementById('loadMoreContainer').style.display = 'none';
+        
+    } catch (error) {
+        console.error('Error searching files:', error);
+        document.getElementById('filesContainer').innerHTML = `
+            <div class="loading">
+                <p style="color: #f56565;">❌ Search failed. Please try again.</p>
+            </div>
+        `;
+    }
+    
+    isLoading = false;
+}
+
+function displayFiles(files) {
+    const container = document.getElementById('filesContainer');
+    
+    if (files.length === 0) {
+        container.innerHTML = `
+            <div class="loading">
+                <p>📁 No files found</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = '<div class="file-grid">' + files.map(file => createFileCard(file)).join('') + '</div>';
+}
+
+function appendFiles(files) {
+    const grid = document.querySelector('.file-grid');
+    if (grid) {
+        grid.innerHTML += files.map(file => createFileCard(file)).join('');
+    }
+}
+
+function createFileCard(file) {
+    const fileSize = formatFileSize(file.file_size);
+    const uploadDate = new Date(file.upload_date).toLocaleDateString();
+    const isMedia = file.mime_type && (file.mime_type.startsWith('video/') || file.mime_type.startsWith('audio/'));
+    
+    return `
+        <div class="file-card">
+            <div class="file-name">
+                ${getFileIcon(file.mime_type)} ${truncateFileName(file.original_name)}
+            </div>
+            <div class="file-info">
+                📊 ${fileSize} • 📅 ${uploadDate} • ⬇️ ${file.download_count} downloads
+            </div>
+            <div class="file-actions">
+                ${isMedia ? `
+                    <a href="/player/${file.file_id}" class="btn btn-success" target="_blank">
+                        🎬 Play
+                    </a>
+                ` : ''}
+                <a href="/stream/${file.file_id}" class="btn" target="_blank">
+                    📥 Download
+                </a>
+                <button onclick="copyShareLink('${file.file_id}')" class="btn btn-warning">
+                    🔗 Copy Link
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function getFileIcon(mimeType) {
+    if (!mimeType) return '📄';
+    
+    if (mimeType.startsWith('video/')) return '🎬';
+    if (mimeType.startsWith('audio/')) return '🎵';
+    if (mimeType.startsWith('image/')) return '🖼️';
+    if (mimeType.includes('pdf')) return '📋';
+    if (mimeType.includes('zip') || mimeType.includes('rar') || mimeType.includes('7z')) return '📦';
+    if (mimeType.includes('text')) return '📝';
+    
+    return '📄';
+}
+
+function truncateFileName(filename) {
+    if (filename.length > 30) {
+        return filename.substring(0, 27) + '...';
+    }
+    return filename;
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function copyShareLink(fileId) {
+    const url = `${window.location.origin}/stream/${fileId}`;
+    navigator.clipboard.writeText(url).then(() => {
+        // Simple notification
+        const btn = event.target;
+        const originalText = btn.textContent;
+        btn.textContent = '✅ Copied!';
+        btn.style.background = '#48bb78';
+        
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.background = '#ed8936';
+        }, 2000);
+    }).catch(() => {
+        alert('Share link: ' + url);
+    });
+}
+
+// Search on Enter key
+document.getElementById('searchInput').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        searchFiles();
+    }
+});
+
+// Load files when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    loadFiles();
+});
+</script>
+{% endblock %}
