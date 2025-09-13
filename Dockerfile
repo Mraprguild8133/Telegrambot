@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Command to run the Python application
-CMD ["python", "bot.py"]
+CMD ["python", "simple_bot.py"]
